@@ -73,6 +73,20 @@ input:focus,select:focus{border-color:#169447}
 
 .payment-box-single{background:#fff;border:3px solid #0b63ce;border-radius:18px;padding:20px;margin-top:15px;box-shadow:0 6px 20px rgba(11,99,206,0.15)}
 .payment-logo-img{width:72px;height:72px;border-radius:50%;object-fit:contain;display:block;margin:0 auto 10px;background:#fff}
+
+.cycle-summary{background:#fff;border:3px solid #0b63ce;border-radius:18px;padding:16px;margin-bottom:14px;box-shadow:0 6px 20px rgba(11,99,206,.12)}
+.cycle-summary-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;margin-top:10px}
+.cycle-stat{background:#f4f7fb;border:2px solid #d8e6f8;border-radius:13px;padding:11px}
+.cycle-stat small{display:block;color:#687386;font-size:10px;font-weight:900}
+.cycle-stat strong{display:block;color:#0b63ce;font-size:18px;margin-top:4px;font-weight:900}
+.product-accrual{margin-top:12px;padding:13px;border:2px solid #0b63ce;border-radius:14px;background:#f4f8ff}
+.product-accrual-row{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px dashed #cfdbea;font-size:12px;font-weight:800}
+.product-accrual-row:last-child{border-bottom:0}
+.claim-btn{width:100%;padding:13px;border-radius:12px;margin-top:12px;background:#169447;color:#fff;font-weight:900;box-shadow:0 4px 12px rgba(22,148,71,.22)}
+.claim-btn:disabled{background:#b7c0ca;color:#fff;box-shadow:none;cursor:not-allowed;opacity:.9}
+.lock-note{margin-top:8px;text-align:center;font-size:11px;color:#687386;font-weight:800}
+.withdrawable-badge{display:inline-block;margin-top:8px;padding:6px 10px;border-radius:999px;background:#e8f8ef;color:#169447;font-size:11px;font-weight:900}
+
 @media(min-width:521px){body{background:#cce0ff}.app{box-shadow:0 0 40px rgba(11,99,206,0.25)}}
 
 .deposit-loading{
@@ -390,6 +404,18 @@ input:focus,select:focus{border-color:#169447}
     <!-- ACTIVE PRODUCTS -->
     <div id="page-active-products" class="page hidden">
       <div class="page-title"><button class="back" onclick="showPage('profile')">←</button><h2>📦 Mes produits actifs</h2></div>
+
+      <div class="cycle-summary">
+        <h3>📊 Suivi de mes revenus</h3>
+        <div class="cycle-summary-grid">
+          <div class="cycle-stat"><small>💰 Accumulé aujourd'hui</small><strong id="accruedToday">0 FC</strong></div>
+          <div class="cycle-stat"><small>📈 Total accumulé</small><strong id="accruedTotal">0 FC</strong></div>
+          <div class="cycle-stat"><small>🔒 Bloqué jusqu'à la fin</small><strong id="lockedTotal">0 FC</strong></div>
+          <div class="cycle-stat"><small>💸 Retrait autorisé</small><strong id="withdrawableTotal">0 FC</strong></div>
+        </div>
+        <div id="cycleGlobalMessage" class="lock-note">Les revenus restent dans vos produits actifs pendant le cycle.</div>
+      </div>
+
       <div id="activeProductsList"></div>
     </div>
 
@@ -751,47 +777,199 @@ function getActivatedTimestamp(p){
 
 async function processProductPayouts(){
   if(!currentUser || !Array.isArray(currentUser.products)) return false;
-  let changed = false;
+
   const now = Date.now();
+  const DAY = 24*60*60*1000;
+  const CYCLE_DAYS = 15;
+  const RELEASE_START_DAY = 13;
+  let changed = false;
+
   for(const p of currentUser.products){
-    if(p.status !== "Actif") continue;
+    if(!p || p.status !== "Actif") continue;
+
     const activated = getActivatedTimestamp(p);
-    if(!p.activatedAtMs){ p.activatedAtMs=activated; changed=true; }
-    let next = Number(p.nextPayoutAt || 0);
-    if(!next){
-      next = activated + 24*60*60*1000;
-      p.nextPayoutAt = next;
+    if(!p.activatedAtMs){
+      p.activatedAtMs = activated;
       changed = true;
     }
-    const daily = Number(p.daily || 0);
-    if(daily > 0 && now >= next){
-      const cycles = Math.max(1, Math.floor((now - next) / (24*60*60*1000)) + 1);
-      const total = daily * cycles;
-      currentUser.balance = Number(currentUser.balance || 0) + total;
-      for(let i=0;i<cycles;i++){
-        currentUser.history = currentUser.history || [];
-        currentUser.history.unshift({
-          type: "Revenu journalier",
-          amount: daily,
-          status: "Crédité",
-          date: new Date(next + i*24*60*60*1000).toLocaleString("fr-FR"),
-          method: p.name
-        });
-      }
-      p.lastPayoutAt = next + (cycles-1)*24*60*60*1000;
-      p.nextPayoutAt = next + cycles*24*60*60*1000;
+
+    // Un cycle = 15 jours. Les revenus sont seulement comptabilisés
+    // dans le produit et ne sont jamais crédités automatiquement au solde.
+    const cycleStart = Number(p.cycleStartAtMs || activated);
+    if(!p.cycleStartAtMs){
+      p.cycleStartAtMs = cycleStart;
       changed = true;
+    }
+
+    const elapsedDays = Math.max(0, Math.floor((now - cycleStart) / DAY));
+    const completedDays = Math.min(CYCLE_DAYS, elapsedDays);
+    const daily = Math.max(0, Number(p.daily || 0));
+
+    const calculatedTotal = daily * completedDays;
+    const previousTotal = Number(p.accruedTotal || 0);
+
+    if(previousTotal !== calculatedTotal){
+      p.accruedTotal = calculatedTotal;
+      changed = true;
+    }
+
+    p.cycleDays = CYCLE_DAYS;
+    p.completedDays = completedDays;
+    p.daysRemaining = Math.max(0, CYCLE_DAYS - completedDays);
+
+    // Les 3 derniers jours (jours 13, 14 et 15) sont la partie
+    // autorisée au retrait. Cette somme reste affichée sur le produit
+    // jusqu'à une opération de retrait ou de réclamation.
+    const releaseDays = Math.max(0, completedDays - (RELEASE_START_DAY - 1));
+    const releaseGross = daily * releaseDays;
+    const withdrawnFromProduct = Number(p.withdrawnFromProduct || 0);
+    p.withdrawableAmount = Math.max(0, releaseGross - withdrawnFromProduct);
+
+    const claimAt = cycleStart + CYCLE_DAYS * DAY;
+    p.claimAvailableAt = claimAt;
+    p.cycleFinished = now >= claimAt;
+
+    if(p.cycleFinished && !p.claimedAtMs){
+      p.claimStatus = "Réclamation disponible";
+    } else if(p.claimedAtMs){
+      p.claimStatus = "Réclamé";
+    } else {
+      p.claimStatus = "Verrouillé";
     }
   }
+
   if(changed){
-    const saved = await persistCurrentUser();
-    if(saved){
-      document.getElementById("balance").textContent = ((currentUser.balance || 0) + (currentUser.bonus || 0)).toLocaleString("fr-FR") + " FC";
-      renderActiveProducts();
-    }
-    return saved;
+    return await persistCurrentUser();
   }
   return false;
+}
+
+function getProductAccrualSnapshot(){
+  const products = Array.isArray(currentUser?.products) ? currentUser.products : [];
+  const DAY = 24*60*60*1000;
+  let today = 0, total = 0, locked = 0, withdrawable = 0;
+
+  for(const p of products){
+    if(!p || p.status !== "Actif") continue;
+    const daily = Math.max(0, Number(p.daily || 0));
+    const start = Number(p.cycleStartAtMs || p.activatedAtMs || getActivatedTimestamp(p));
+    const completedDays = Math.min(15, Math.max(0, Math.floor((Date.now()-start)/DAY)));
+    total += Number(p.accruedTotal || daily * completedDays);
+    withdrawable += Number(p.withdrawableAmount || 0);
+  }
+
+  // "Aujourd'hui" = le revenu journalier théorique des produits qui ont
+  // un jour en cours; il n'est pas encore ajouté au solde.
+  const dayKey = new Date().toDateString();
+  const storedDay = currentUser?.accrualTodayDate || "";
+  if(storedDay === dayKey){
+    today = Number(currentUser?.accruedToday || 0);
+  }else{
+    today = products.filter(p=>p?.status==="Actif").reduce((sum,p)=>sum+Number(p.daily||0),0);
+  }
+
+  locked = Math.max(0, total - withdrawable);
+  return {today,total,locked,withdrawable};
+}
+
+async function claimProductIncome(index){
+  if(!currentUser || !Array.isArray(currentUser.products)) return;
+  const p = currentUser.products[index];
+  if(!p || p.status !== "Actif") return;
+
+  const DAY = 24*60*60*1000;
+  const cycleStart = Number(p.cycleStartAtMs || p.activatedAtMs || getActivatedTimestamp(p));
+  const claimAt = cycleStart + 15*DAY;
+
+  if(Date.now() < claimAt){
+    toast("🔒 Réclamation verrouillée : le cycle de 15 jours n'est pas terminé.");
+    return;
+  }
+
+  const total = Number(p.accruedTotal || 0);
+  const alreadyClaimed = Number(p.claimedAmount || 0);
+  const amount = Math.max(0, total - alreadyClaimed);
+
+  if(amount <= 0){
+    toast("Aucun revenu à réclamer sur ce produit.");
+    return;
+  }
+
+  if(!confirm("Réclamer " + amount.toLocaleString("fr-FR") + " FC vers votre solde principal ?")) return;
+
+  showDepositLoading();
+  setActionLoading("Transfert des revenus vers votre solde...");
+
+  try{
+    currentUser.balance = Number(currentUser.balance || 0) + amount;
+    currentUser.history = Array.isArray(currentUser.history) ? currentUser.history : [];
+    currentUser.history.unshift({
+      type: "Réclamation revenus produit",
+      amount,
+      status: "Crédité",
+      date: new Date().toLocaleString("fr-FR"),
+      method: p.name
+    });
+
+    p.claimedAmount = total;
+    p.claimedAtMs = Date.now();
+    p.claimStatus = "Réclamé";
+    p.withdrawableAmount = 0;
+    p.withdrawnFromProduct = 0;
+    p.status = "Terminé";
+
+    const saved = await persistCurrentUser();
+    if(saved){
+      updateUI();
+      toast("✅ Revenus transférés dans votre solde principal.");
+    }
+  }catch(e){
+    console.error(e);
+    toast("Erreur : la réclamation n'a pas été enregistrée.");
+  }finally{
+    hideDepositLoading();
+    stopActionLoading();
+  }
+}
+
+async function withdrawFromProduct(index){
+  if(!currentUser || !Array.isArray(currentUser.products)) return;
+  const p = currentUser.products[index];
+  if(!p || p.status !== "Actif") return;
+
+  const amount = Number(p.withdrawableAmount || 0);
+  if(amount <= 0){
+    toast("🔒 Les revenus retirables ne sont disponibles que pendant les 3 derniers jours du cycle.");
+    return;
+  }
+
+  const fee = Math.round(amount * 0.15);
+  const net = amount - fee;
+
+  if(!confirm("Retirer " + amount.toLocaleString("fr-FR") + " FC ?\n\nFrais (15 %) : " + fee.toLocaleString("fr-FR") + " FC\nNet : " + net.toLocaleString("fr-FR") + " FC")){
+    return;
+  }
+
+  p.withdrawnFromProduct = Number(p.withdrawnFromProduct || 0) + amount;
+  p.withdrawableAmount = 0;
+
+  currentUser.history = Array.isArray(currentUser.history) ? currentUser.history : [];
+  currentUser.history.unshift({
+    type: "Retrait revenus produit",
+    amount,
+    fee,
+    net,
+    status: "En attente",
+    date: new Date().toLocaleString("fr-FR"),
+    method: p.name
+  });
+
+  const saved = await persistCurrentUser();
+  if(saved){
+    updateUI();
+    toast("Demande de retrait enregistrée.");
+    showPage("history");
+  }
 }
 
 function updateUI(){
@@ -1016,51 +1194,106 @@ function formatCountdown(ms){
 
 function renderActiveProducts(){
   const box = document.getElementById("activeProductsList");
-  if(!currentUser || !currentUser.products || currentUser.products.length === 0){
+  if(!currentUser || !Array.isArray(currentUser.products) || currentUser.products.length === 0){
     box.innerHTML = '<div class="card"><div class="empty">Aucun produit actif pour le moment.</div></div>';
+    updateAccrualSummary();
     return;
   }
+
+  const DAY=24*60*60*1000;
   box.innerHTML = currentUser.products.map((p,i) => {
-    const next = Number(p.nextPayoutAt || (getActivatedTimestamp(p) + 24*60*60*1000));
-    const remaining = Math.max(0,next-Date.now());
+    if(!p || p.status !== "Actif") return "";
+
+    const start=Number(p.cycleStartAtMs || p.activatedAtMs || getActivatedTimestamp(p));
+    const claimAt=start+15*DAY;
+    const completed=Math.min(15,Math.max(0,Math.floor((Date.now()-start)/DAY)));
+    const remaining=Math.max(0,claimAt-Date.now());
+    const accrued=Number(p.accruedTotal || 0);
+    const withdrawable=Number(p.withdrawableAmount || 0);
+    const finished=Date.now()>=claimAt;
+
     return `
     <div class="card">
-      <div class="product-head"><h3>📦 ${p.name}</h3><span class="badge">${p.status}</span></div>
+      <div class="product-head">
+        <h3>📦 ${p.name}</h3>
+        <span class="badge">${finished ? "Cycle terminé" : "Actif"}</span>
+      </div>
       <p>Investissement : <b>${Number(p.amount).toLocaleString("fr-FR")} FC</b></p>
       <p>Gain journalier : <b>${Number(p.daily).toLocaleString("fr-FR")} FC</b></p>
-      <div class="active-timer" data-product-timer="${i}" data-next-payout="${next}">
-        <span class="timer-label">⏳ Prochain revenu journalier dans</span>
-        <span class="timer-value">${formatCountdown(remaining)}</span>
+
+      <div class="product-accrual">
+        <div class="product-accrual-row"><span>📅 Cycle</span><b>${completed}/15 jours</b></div>
+        <div class="product-accrual-row"><span>💰 Revenus accumulés</span><b>${accrued.toLocaleString("fr-FR")} FC</b></div>
+        <div class="product-accrual-row"><span>🔒 Revenus verrouillés</span><b>${Math.max(0,accrued-withdrawable).toLocaleString("fr-FR")} FC</b></div>
+        <div class="product-accrual-row"><span>💸 Retrait autorisé</span><b>${withdrawable.toLocaleString("fr-FR")} FC</b></div>
       </div>
-      <p style="font-size:11px;color:#169447;margin-top:6px;font-weight:bold">✓ Retraits débloqués</p>
-      <p style="font-size:11px;color:#536279;margin-top:2px;font-weight:bold">Activé le : ${p.activatedAt}</p>
+
+      <div class="active-timer ${finished?'done':''}" data-product-timer="${i}" data-claim-at="${claimAt}">
+        <span class="timer-label">${finished ? "✅ Cycle terminé — réclamation disponible" : "⏳ Temps restant avant la réclamation"}</span>
+        <span class="timer-value">${finished ? "00:00:00" : formatCountdown(remaining)}</span>
+      </div>
+
+      ${withdrawable>0 ? `<span class="withdrawable-badge">💸 Les revenus des 3 derniers jours sont retirables</span>
+      <button class="secondary" style="margin-top:10px" onclick="withdrawFromProduct(${i})">💸 Retirer ${withdrawable.toLocaleString("fr-FR")} FC</button>` : ""}
+
+      <button class="claim-btn" ${finished && accrued>Number(p.claimedAmount||0) ? "" : "disabled"} onclick="claimProductIncome(${i})">
+        ${finished ? "💰 Réclamer mes revenus" : "🔒 Réclamer mes revenus — verrouillé"}
+      </button>
+      <div class="lock-note">
+        ${finished ? "Le cycle est terminé. Vos revenus peuvent maintenant passer dans le solde principal." : "Les revenus restent dans ce produit actif jusqu'à la fin des 15 jours."}
+      </div>
     </div>`;
   }).join("");
+
+  updateAccrualSummary();
+}
+
+function updateAccrualSummary(){
+  if(!currentUser) return;
+  const snap=getProductAccrualSnapshot();
+  const ids=[
+    ["accruedToday",snap.today],
+    ["accruedTotal",snap.total],
+    ["lockedTotal",snap.locked],
+    ["withdrawableTotal",snap.withdrawable]
+  ];
+  ids.forEach(([id,val])=>{
+    const el=document.getElementById(id);
+    if(el) el.textContent=Number(val||0).toLocaleString("fr-FR")+" FC";
+  });
+
+  const msg=document.getElementById("cycleGlobalMessage");
+  if(msg){
+    msg.textContent=snap.withdrawable>0
+      ? "💸 Une partie des revenus des 3 derniers jours est actuellement autorisée au retrait. Le reste demeure sur les produits."
+      : "🔒 Les revenus restent sur vos produits actifs. La réclamation principale se débloque après 15 jours.";
+  }
 }
 
 function refreshProductTimers(){
   document.querySelectorAll("[data-product-timer]").forEach(el=>{
-    const next=Number(el.getAttribute("data-next-payout")||0);
-    const remaining=next-Date.now();
+    const claimAt=Number(el.getAttribute("data-claim-at")||0);
+    const remaining=Math.max(0,claimAt-Date.now());
     const value=el.querySelector(".timer-value");
-    if(value) value.textContent=formatCountdown(remaining);
+    const label=el.querySelector(".timer-label");
+    if(!value) return;
     if(remaining<=0){
       value.textContent="00:00:00";
       el.classList.add("done");
-    } else {
+      if(label) label.textContent="✅ Cycle terminé — réclamation disponible";
+    }else{
+      value.textContent=formatCountdown(remaining);
       el.classList.remove("done");
     }
   });
+  updateAccrualSummary();
 }
 
 setInterval(async()=>{
   refreshProductTimers();
   if(currentUser){
-    const due=(currentUser.products||[]).some(p=>p.status==="Actif" && Number(p.nextPayoutAt||0)>0 && Date.now()>=Number(p.nextPayoutAt));
-    if(due){
-      await processProductPayouts();
-      updateUI();
-    }
+    const changed=await processProductPayouts();
+    if(changed) updateUI();
   }
 },1000);
 
@@ -1291,7 +1524,7 @@ function copyReferralLink(){
 Object.assign(window, {
   login, register, showRegister, showLogin, logout, showPage, copyRef,
   showTeamLevelDetail, copyReferralLink, handleProductClick, proceedToPayment, copyNum,
-  confirmDeposit, makeWithdraw, renderHistory, renderTeamMembers
+  confirmDeposit, makeWithdraw, renderHistory, renderTeamMembers, claimProductIncome, withdrawFromProduct
 });
 
 fillReferralFromUrl();
