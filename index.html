@@ -355,8 +355,73 @@ input,select{border-color:#cfe5ef;background:#fbfeff}input:focus,select:focus{bo
 .history-tab i{display:block;font-size:14px;margin-bottom:4px}
 .history-tab.active{background:#f2c94c;color:#3e3211;border-color:#d7ae32;box-shadow:0 4px 12px rgba(0,0,0,.10)}
 .history-section-title{font-size:15px;font-weight:900;margin:6px 0 10px;color:#302b25}
-.history-row{margin-bottom:8px}
-@media(max-width:380px){.history-tabs{gap:5px}.history-tab{font-size:10px;padding:7px 4px}}
+.history-row{
+  margin-bottom:10px;
+  width:100%;
+  min-width:0;
+  gap:14px;
+  align-items:flex-start!important;
+  overflow:hidden;
+}
+.history-row > div:first-child{
+  flex:1 1 auto;
+  min-width:0;
+  overflow:hidden;
+}
+.history-row > div:last-child{
+  flex:0 0 auto;
+  min-width:95px;
+  max-width:42%;
+  text-align:right;
+}
+.history-row b{
+  display:block;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+}
+.history-row p{
+  max-width:100%;
+  overflow-wrap:anywhere!important;
+  word-break:break-word!important;
+  white-space:normal!important;
+  line-height:1.45!important;
+}
+.history-phone{
+  display:inline-block;
+  margin-top:4px;
+  padding:4px 8px;
+  border-radius:8px;
+  background:#edf4ff;
+  color:#0b63ce!important;
+  font-weight:900;
+  font-size:12px!important;
+}
+.history-ref{
+  color:#6b7280!important;
+  font-size:10px!important;
+  overflow-wrap:anywhere!important;
+  word-break:break-all!important;
+}
+.history-amount{
+  font-size:18px!important;
+  color:#0b63ce!important;
+  white-space:nowrap!important;
+}
+.history-status{
+  font-size:11px!important;
+  line-height:1.35!important;
+  overflow-wrap:anywhere!important;
+}
+@media(max-width:420px){
+  .history-row{gap:8px;padding:12px 0!important}
+  .history-row > div:last-child{min-width:86px;max-width:40%}
+  .history-amount{font-size:16px!important}
+}
+@media(max-width:380px){
+  .history-tabs{gap:5px}.history-tab{font-size:10px;padding:7px 4px}
+  .history-row > div:last-child{min-width:78px}
+  .history-amount{font-size:15px!important}
+}
 
 
 /* ===== Multi-pays SPIRO : ajout sans modification du design existant ===== */
@@ -1234,7 +1299,7 @@ button{appearance:none;-webkit-tap-highlight-color:transparent}
     </p>
 
     <a class="welcome-social welcome-whatsapp"
-       href="https://t.me/+6C4jrfnEuQdhMzhk"
+       href="https://t.me/+WAYuXlTmnNIwMjU0"
        target="_blank" rel="noopener noreferrer">
       <span class="welcome-icon" aria-hidden="true">
         <!-- Icône WhatsApp -->
@@ -1250,7 +1315,7 @@ button{appearance:none;-webkit-tap-highlight-color:transparent}
     </a>
 
     <a class="welcome-social welcome-telegram"
-       href="https://t.me/+6C4jrfnEuQdhMzhk"
+       href="https://t.me/+WAYuXlTmnNIwMjU0"
        target="_blank" rel="noopener noreferrer">
       <span class="welcome-icon" aria-hidden="true">
         <!-- Icône Telegram -->
@@ -1656,7 +1721,7 @@ button{appearance:none;-webkit-tap-highlight-color:transparent}
       </div>
 
       <a class="social-group-btn modern-social social-whatsapp"
-         href="https://t.me/+6C4jrfnEuQdhMzhk"
+         href="https://t.me/+WAYuXlTmnNIwMjU0"
          target="_blank" rel="noopener noreferrer">
         <span class="social-group-icon">
           <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1668,7 +1733,7 @@ button{appearance:none;-webkit-tap-highlight-color:transparent}
       </a>
 
       <a class="social-group-btn modern-social social-telegram"
-         href="https://t.me/+6C4jrfnEuQdhMzhk"
+         href="https://t.me/+WAYuXlTmnNIwMjU0"
          target="_blank" rel="noopener noreferrer">
         <span class="social-group-icon">
           <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -2047,12 +2112,16 @@ async function getUserFromFirebase(phone, requireAuth=false){
   requireAuth = true;
   const cleanPhone = normalizePhone(phone);
   if(!cleanPhone) return null;
-
   if(requireAuth && (!auth || !auth.currentUser)) return null;
 
-  if(db && doc && getDoc){
-    try{
-      const userRef = doc(db, "users", cleanPhone);
+  try{
+    // Le profil SPIRO est enregistré avec pays_numéro (ex. CD_098001234).
+    // On cherche d'abord ce document, puis le numéro simple pour compatibilité.
+    const countryCode = String(currentUser?.country || "CD").toUpperCase();
+    const ids = [countryCode + "_" + cleanPhone, cleanPhone, "CD_" + cleanPhone, "CD" + cleanPhone];
+
+    for(const id of ids){
+      const userRef = doc(db, "users", id);
       const snap = await Promise.race([
         getDoc(userRef),
         new Promise((_, reject)=>setTimeout(()=>reject(new Error("Firebase timeout")), 7000))
@@ -2065,9 +2134,23 @@ async function getUserFromFirebase(phone, requireAuth=false){
         writeLocalUser(user);
         return user;
       }
-    }catch(error){
-      console.warn("Lecture Firestore impossible.", error);
     }
+
+    // Dernier secours : recherche exacte par champ phone.
+    if(collection && query && where && getDocs){
+      const q = query(collection(db,"users"), where("phone","==",cleanPhone));
+      const result = await getDocs(q);
+      if(!result.empty){
+        const user = {phone: cleanPhone, ...result.docs[0].data()};
+        delete user.pass;
+        delete user.password;
+        delete user.passwordHash;
+        writeLocalUser(user);
+        return user;
+      }
+    }
+  }catch(error){
+    console.warn("Lecture Firestore impossible.", error);
   }
   return null;
 }
@@ -2100,17 +2183,25 @@ function stopUserRealtimeSync(){
 
 function startUserRealtimeSync(){
   stopUserRealtimeSync();
-  if(!currentUser || !db || !doc || typeof onSnapshot !== "function") return;
+  if(!currentUser || !db || typeof onSnapshot !== "function") return;
   const cleanPhone = normalizePhone(currentUser.phone);
   if(!cleanPhone) return;
-  const userRef = doc(db, "users", cleanPhone);
-  stopUserRealtime = onSnapshot(userRef, snap => {
+
+  const countryCode = String(currentUser.country || "CD").toUpperCase();
+  const primaryRef = doc(db, "users", countryCode + "_" + cleanPhone);
+
+  stopUserRealtime = onSnapshot(primaryRef, snap => {
     if(!snap.exists() || !currentUser) return;
-    const data=snap.data();
-    if(auth?.currentUser?.uid && data.uid && data.uid!==auth.currentUser.uid) return;
+    const data = snap.data();
+    if(auth?.currentUser?.uid && data.uid && data.uid !== auth.currentUser.uid) return;
+
+    // Toute modification faite depuis le panneau admin (manualBalance/balance)
+    // arrive ici automatiquement sans déconnexion ni rechargement.
     currentUser = {phone: cleanPhone, ...data};
     delete currentUser.pass;
     delete currentUser.password;
+    delete currentUser.passwordHash;
+    ensureIncomeBreakdown(currentUser);
     state.users = [currentUser];
     writeLocalUser(currentUser);
     updateUI();
@@ -4357,6 +4448,32 @@ document.addEventListener("input", function(e){
   }
 });
 
+function formatPhoneDisplay(value){
+  let raw=String(value||"").replace(/\D/g,"");
+  if(!raw) return "";
+  if(raw.startsWith("243") && raw.length>=12) raw="0"+raw.slice(3);
+  if(raw.length===9) raw="0"+raw;
+  if(raw.length===10 && raw.startsWith("0")){
+    return raw.slice(0,4)+" "+raw.slice(4,7)+" "+raw.slice(7,10);
+  }
+  if(raw.length>10) return raw.replace(/(\d{3})(?=\d)/g,"$1 ").trim();
+  return raw;
+}
+
+function getWithdrawalPhone(h){
+  if(h.phone || h.phoneNumber || h.telephone) return h.phone || h.phoneNumber || h.telephone;
+  const ref=String(h.ref||"");
+  const parts=ref.split(":");
+  // Les anciennes références SPIRO contiennent souvent le numéro entre : .
+  for(const part of parts){
+    const digits=String(part).replace(/\D/g,"");
+    if(digits.length===9 || (digits.length===10 && digits.startsWith("0")) || (digits.length>=12 && digits.startsWith("243"))){
+      return digits;
+    }
+  }
+  return "";
+}
+
 function renderHistory(filter = "deposits"){
   window.__lwHistoryFilter = filter;
   setHistoryFilterActive(filter);
@@ -4365,6 +4482,7 @@ function renderHistory(filter = "deposits"){
     box.innerHTML = '<div class="empty">Aucun historique disponible.</div>';
     return;
   }
+
   const history = Array.isArray(currentUser.history) ? currentUser.history : [];
   const deposits = history.filter(h => h.type === "Dépôt");
   const withdrawals = history.filter(h => h.type === "Retrait");
@@ -4405,21 +4523,31 @@ function renderHistory(filter = "deposits"){
     return h.status || "—";
   };
 
+  const safeHistoryText = value => String(value ?? "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[c]));
+
   box.innerHTML = tabs + '<div class="history-section-title">' + title + '</div>' +
-    selected.map(h => `
+    selected.map(h => {
+      const isWithdrawal = h.type === "Retrait";
+      const phone = isWithdrawal ? getWithdrawalPhone(h) : "";
+      const formattedPhone = formatPhoneDisplay(phone);
+      const ref = safeHistoryText(h.ref || "");
+      return `
       <div class="team-row history-row">
         <div>
-          <b>${h.type}</b>
-          <p style="font-size:11px;color:#536279;margin-top:4px">${h.date || ""}</p>
-          ${h.ref ? '<p style="font-size:11px;color:#0b63ce;margin-top:2px">Réf: ' + h.ref + '</p>' : ''}
+          <b>${safeHistoryText(h.type)}</b>
+          <p style="font-size:11px;color:#536279;margin-top:4px">${safeHistoryText(h.date || "")}</p>
+          ${formattedPhone ? '<p class="history-phone">📱 ' + safeHistoryText(formattedPhone) + '</p>' : ''}
+          ${ref ? '<p class="history-ref">Réf : ' + ref + '</p>' : ''}
         </div>
-        <div style="text-align:right">
-          <b>${Number(h.amount || 0).toLocaleString("fr-FR")} FC</b>
-          <p style="font-size:11px;color:#169447;margin-top:4px">${historyStatusText(h)}</p>
+        <div>
+          <b class="history-amount">${Number(h.amount || 0).toLocaleString("fr-FR")} FC</b>
+          <p class="history-status" style="color:#169447;margin-top:4px">${safeHistoryText(historyStatusText(h))}</p>
         </div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
 }
-
 async function getTeamHierarchy(){
   const levels={1:[],2:[],3:[]};
   if(!currentUser?.refCode) return levels;
